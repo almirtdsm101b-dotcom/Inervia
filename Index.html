@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Inérvia - Assistente Preditivo (Anti-Sleep)</title>
+    
+    <link rel="manifest" href="manifest.json">
+    <meta name="theme-color" content="#121212">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+
+    <style>
+        body { font-family: Arial, sans-serif; background: #121212; color: #fff; padding: 15px; text-align: center; }
+        .card { background: #1e1e1e; padding: 15px; border-radius: 10px; margin-bottom: 15px; box-shadow: 0 4px 6px rgba(0,0,0,0.3); text-align: left; }
+        label { font-size: 14px; color: #aaa; display: block; margin-top: 8px; }
+        input, button { width: 100%; padding: 10px; margin-top: 5px; font-size: 16px; border-radius: 5px; border: none; box-sizing: border-box; }
+        input { background: #2c2c2c; color: #fff; text-align: center; }
+        button { background: #4CAF50; color: white; cursor: pointer; font-weight: bold; margin-top: 10px; }
+        button.stop { background: #f44336; }
+        button.secondary { background: #2196F3; }
+        .data { font-size: 18px; color: #00e676; font-weight: bold; }
+        .alerta-seguranca { background: #e53935; color: #fff; padding: 15px; border-radius: 5px; font-weight: bold; display: none; margin-top: 10px; text-align: center; font-size: 18px; animation: piscar 1s infinite; }
+        @keyframes piscar { 0% { opacity: 1; } 50% { opacity: 0.5; } 100% { opacity: 1; } }
+        .status-modo { color: #2196F3; font-weight: bold; }
+        .center { text-align: center; }
+        pre { background: #111; color: #00e676; padding: 10px; border-radius: 5px; overflow-x: auto; font-size: 12px; max-height: 200px; text-align: left; }
+        .aviso-tela { background: #ff9800; color: #000; padding: 8px; border-radius: 5px; font-size: 12px; margin-top: 5px; font-weight: bold; display: none; }
+    </style>
+</head>
+<body>
+
+    <h2 class="center">Inérvia - Assistente Preditivo</h2>
+
+    <div class="card">
+        <h3>Parâmetros da Viagem</h3>
+        
+        <label>Peso Bruto Total (Ton):</label>
+        <input type="number" id="peso" value="74">
+
+        <label>Velocidade Máxima (km/h):</label>
+        <input type="number" id="velMax" value="79">
+
+        <button onclick="iniciarSistema()">Iniciar Viagem</button>
+        <button class="stop" onclick="pararSistema()">Encerrar e Salvar</button>
+        <div id="avisoWakeLock" class="aviso-tela">🛡️ Proteção contra suspensão de tela ativa.</div>
+    </div>
+
+    <div id="painelSeguranca" class="alerta-seguranca">
+        🚨 ALERTA DE SEGURANÇA (G > 0.50)!<br><span style="font-size: 14px; font-weight: normal;">Curva acentuada ou manobra brusca detectada! Cuidado com a estabilidade.</span>
+    </div>
+
+    <div class="card center">
+        <h3>Gerenciamento de Dados</h3>
+        <button class="secondary" onclick="verDadosSalvos()">Ver Dados na Tela</button>
+        <button class="secondary" onclick="baixarDadosSalvos()">Baixar Backup (JSON)</button>
+        <pre id="caixaVisualizacao" style="display:none; margin-top: 10px;"></pre>
+    </div>
+
+    <div class="card center">
+        <h3>Status do Sistema</h3>
+        <p>Modo Atual: <span id="modoOperacao" class="status-modo">Aguardando Início</span></p>
+        <button onclick="testarVoz()" style="background: #2196F3; margin-top: 10px; padding: 8px; font-size: 14px;">Testar Áudio/Voz</button>
+    </div>
+
+    <div class="card center">
+        <h3>Telemetria & G-Force</h3>
+        <p>Latitude: <span id="lat" class="data">0.0</span></p>
+        <p>Longitude: <span id="lon" class="data">0.0</span></p>
+        <p>Altitude: <span id="alt" class="data">0</span> metros</p>
+        <p>Velocidade: <span id="vel" class="data">0</span> km/h</p>
+        <p>Força G Lateral: <span id="gForce" class="data">0.00</span> G</p>
+    </div>
+
+    <div class="card center">
+        <h3>Pontos na Memória: <span id="contador">0</span></h3>
+    </div>
+
+    <script>
+        let watchId = null;
+        let sessaoPontos = [];
+        let rotasSalvas = JSON.parse(localStorage.getItem("minhas_rotas_locais")) || [];
+        let alertaSegurancaEmitido = false;
+        let accelX = 0;
+        let wakeLock = null;
+
+        // Função para manter a tela/processador acordados
+        async function solicitarWakeLock() {
+            if ('wakeLock' in navigator) {
+                try {
+                    wakeLock = await navigator.wakeLock.request('screen');
+                    document.getElementById("avisoWakeLock").style.display = "block";
+                    
+                    // Se o usuário alternar de aba e voltar, o wakeLock precisa ser pedido de novo
+                    wakeLock.addEventListener('release', () => {
+                        console.log('Wake Lock liberado pelo sistema.');
+                    });
+                } catch (err) {
+                    console.error(`${err.name}, ${err.message}`);
+                }
+            }
+        }
+
+        function liberarWakeLock() {
+            if (wakeLock !== null) {
+                wakeLock.release().then(() => {
+                    wakeLock = null;
+                    document.getElementById("avisoWakeLock").style.display = "none";
+                });
+            }
+        }
+
+        // Re-adquire o Wake Lock se a página voltar a ficar visível
+        document.addEventListener('visibilitychange', async () => {
+            if (wakeLock !== null && document.visibilityState === 'visible') {
+                await solicitarWakeLock();
+            }
+        });
+
+        function falar(mensagem) {
+            if ('speechSynthesis' in window) {
+                window.speechSynthesis.cancel();
+                let fala = new SpeechSynthesisUtterance(mensagem);
+                fala.lang = 'pt-BR';
+                fala.rate = 1.0;
+                window.speechSynthesis.speak(fala);
+            }
+        }
+
+        function tocarBipeEmergencia() {
+            try {
+                let audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                let osc = audioCtx.createOscillator();
+                let gain = audioCtx.createGain();
+                osc.type = 'square';
+                osc.frequency.value = 950;
+                osc.connect(gain);
+                gain.connect(audioCtx.destination);
+                osc.start();
+                setTimeout(() => { osc.stop(); }, 400);
+            } catch (e) {
+                console.log("Áudio bloqueado até interação");
+            }
+        }
+
+        function testarVoz() {
+            tocarBipeEmergencia();
+            falar("Inérvia. Alerta de segurança configurado para zero vírgula cinquenta G.");
+        }
+
+        window.addEventListener("devicemotion", (event) => {
+            if (event.accelerationIncludingGravity) {
+                let x = event.accelerationIncludingGravity.x || 0;
+                accelX = (x / 9.81);
+                document.getElementById("gForce").innerText = Math.abs(accelX).toFixed(2);
+            }
+        });
+
+        function verDadosSalvos() {
+            let dados = localStorage.getItem("minhas_rotas_locais");
+            let caixa = document.getElementById("caixaVisualizacao");
+            
+            if (!dados || JSON.parse(dados).length === 0) {
+                caixa.style.display = "block";
+                caixa.innerText = "Nenhuma rota salva na memória ainda.";
+            } else {
+                caixa.style.display = "block";
+                caixa.innerText = JSON.stringify(JSON.parse(dados), null, 2);
+            }
+        }
+
+        function baixarDadosSalvos() {
+            let dados = localStorage.getItem("minhas_rotas_locais");
+            if (!dados || JSON.parse(dados).length === 0) {
+                alert("Não há dados salvos para exportar.");
+                return;
+            }
+            let blob = new Blob([dados], { type: "application/json" });
+            let url = URL.createObjectURL(blob);
+            let a = document.createElement("a");
+            a.href = url;
+            a.download = "inervia_historico_viagens.json";
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+        }
+
+        async function iniciarSistema() {
+            let pbt = document.getElementById("peso").value;
+            let velMax = document.getElementById("velMax").value;
+
+            if (!pbt || !velMax) {
+                alert("Preencha os dados do caminhão!");
+                return;
+            }
+
+            if ("geolocation" in navigator) {
+                sessaoPontos = [];
+                alertaSegurancaEmitido = false;
+                
+                // Ativa o bloqueio de tela apagada
+                await solicitarWakeLock();
+
+                document.getElementById("modoOperacao").innerText = "Modo Operação Ativo (Anti-Sleep Ativado)";
+                falar("Sistema iniciado com proteção de tela ativa.");
+                
+                watchId = navigator.geolocation.watchPosition(
+                    (position) => {
+                        let lat = position.coords.latitude;
+                        let lon = position.coords.longitude;
+                        let alt = position.coords.altitude !== null ? position.coords.altitude : 0;
+                        let vel = position.coords.speed !== null ? (position.coords.speed * 3.6).toFixed(1) : 0;
+                        let gBruto = accelX;
+                        let gAbs = Math.abs(accelX);
+
+                        document.getElementById("lat").innerText = lat.toFixed(6);
+                        document.getElementById("lon").innerText = lon.toFixed(6);
+                        document.getElementById("alt").innerText = alt.toFixed(1);
+                        document.getElementById("vel").innerText = vel;
+
+                        let lado = "Nenhum";
+                        if (gBruto > 0.20) lado = "Esquerda";
+                        if (gBruto < -0.20) lado = "Direita";
+
+                        // GATILHO DE ALERTA DE SEGURANÇA EM 0.50 G
+                        if (gAbs >= 0.50 && vel > 15) {
+                            document.getElementById("painelSeguranca").style.display = "block";
+                            if (!alertaSegurancaEmitido) {
+                                tocarBipeEmergencia();
+                                falar("Atenção! Curva muito fechada. Cuidado com a estabilidade.");
+                                alertaSegurancaEmitido = true;
+                            }
+                        } else if (gAbs < 0.35) {
+                            document.getElementById("painelSeguranca").style.display = "none";
+                            alertaSegurancaEmitido = false;
+                        }
+
+                        let ponto = { 
+                            lat, 
+                            lon, 
+                            alt, 
+                            vel, 
+                            gForce: gAbs.toFixed(2), 
+                            ladoCurva: lado, 
+                            tempo: new Date().toLocaleTimeString() 
+                        };
+                        
+                        sessaoPontos.push(ponto);
+                        document.getElementById("contador").innerText = sessaoPontos.length;
+
+                    },
+                    (error) => {
+                        alert("Erro de GPS: " + error.message);
+                    },
+                    { enableHighAccuracy: true, maximumAge: 0, timeout: 5000 }
+                );
+            } else {
+                alert("Geolocalização não suportada.");
+            }
+        }
+
+        function pararSistema() {
+            if (watchId !== null) {
+                navigator.geolocation.clearWatch(watchId);
+                watchId = null;
+
+                // Libera o bloqueio de tela
+                liberarWakeLock();
+
+                rotasSalvas.push(sessaoPontos);
+                localStorage.setItem("minhas_rotas_locais", JSON.stringify(rotasSalvas));
+
+                falar("Viagem encerrada e telemetria salva com sucesso.");
+                alert("Viagem finalizada! Dados de estabilidade gravados.");
+                document.getElementById("modoOperacao").innerText = "Salvo com Sucesso";
+            } else {
+                alert("Nenhuma viagem em andamento.");
+            }
+        }
+    </script>
+
+</body>
+</html>
