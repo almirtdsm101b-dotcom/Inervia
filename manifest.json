@@ -1,13 +1,14 @@
 {
   "name": "Inérvia Assistente Preditivo",
   "short_name": "Inérvia",
-  "start_url": "./index.html",
+  "description": "Aplicativo profissional de telemetria de carga, força G e GPS para transporte.",
+  "start_url": "./Index.html",
   "display": "standalone",
   "background_color": "#121212",
   "theme_color": "#121212",
   "icons": [
     {
-      "src": "https://i.ibb.co/rR0TqcTT/watermarked-img-769145046426348781.png",
+      "src": "https://i.ibb.co/rROtQcTT/water.png",
       "sizes": "512x512",
       "type": "image/png"
     }
