@@ -1,0 +1,16 @@
+{
+  "name": "Inervia",
+  "short_name": "Inervia",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#121212",
+  "theme_color": "#121212",
+  "icons": [
+    {
+      "src": "https://raw.githubusercontent.com/almirtdsm101b-dotcom/Inervia/main/index.html",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
